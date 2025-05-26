@@ -1,23 +1,6 @@
 Epic 1: Backend Foundation & Core Services
 Goal: Establish the basic backend server, configuration, and initial provider interfaces.
 
-    LC-001: Initialize Project & Basic FastAPI App
-        Description: Set up the Git repository, Python virtual environment, and a minimal FastAPI application (backend/main.py). Include standard project files like .gitignore and a basic README.md.
-        AC:
-            Git repository is initialized and pushed to the remote.
-            Python virtual environment (e.g., venv) setup is documented in README.md.
-            FastAPI application in backend/main.py runs successfully.
-            Server starts via python -m backend on 127.0.0.1:8000.
-            A root endpoint / returns a simple JSON response (e.g., {"message": "LightChat Backend Active"}).
-
-    LC-002: Implement Initial Application Configuration (AppConfig)
-        Description: Develop backend/config.py to manage AppConfig (fields: default_provider, log_dir, logging_enabled). Use Pydantic for model definition. Load from and save to settings.yaml in a platform-appropriate config directory (initially, can use ~/.lightchat/ as a placeholder, to be refined).
-        AC:
-            AppConfig Pydantic model is defined in config.py.
-            Function load_app_config() reads from settings.yaml, returning defaults if the file or keys are missing.
-            Function save_app_config() writes the AppConfig to settings.yaml.
-            The default configuration path is ~/.lightchat/settings.yaml (or documented alternative for initial dev).
-            Unit tests cover loading default, existing, and saving AppConfig.
 
     LC-003: Create Backend Health Check Endpoint
         Description: Add a GET /health endpoint to the FastAPI app to allow monitoring of the backend's status.
