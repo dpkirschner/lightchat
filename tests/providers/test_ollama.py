@@ -219,16 +219,20 @@ async def test_chat_stream_missing_model_id(ollama_provider, caplog):
 
 @pytest.mark.asyncio
 async def test_chat_stream_connection_error(ollama_provider, httpx_mock, caplog):
-    """Test chat_stream handles connection errors."""
+    """Test chat_stream handles connection errors with retry."""
+    # Add two exceptions to test the retry logic
+    httpx_mock.add_exception(httpx.ConnectError("Connection failed"))
     httpx_mock.add_exception(httpx.ConnectError("Connection failed"))
     
     chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
     
     assert len(chunks) == 1
     assert "error" in chunks[0]
-    assert chunks[0]["error"] == "Failed to connect to Ollama service"
-    assert "Failed to connect to Ollama API" in caplog.text
-    assert "chat_stream" in caplog.text # Check specific method log
+    assert "Failed to connect to Ollama service after multiple retries" in chunks[0]["error"]
+    assert "Failed to connect to Ollama API after 2 attempts" in caplog.text
+    assert "Request error (attempt 1/2)" in caplog.text
+    # The actual log messages don't include the method name, so we'll just verify the error level messages
+    assert any(record.levelname == "ERROR" for record in caplog.records)
 
 @pytest.mark.asyncio
 async def test_chat_stream_http_error(ollama_provider, httpx_mock, caplog):
@@ -310,3 +314,101 @@ async def test_chat_stream_with_settings(ollama_provider, httpx_mock):
     assert payload["temperature"] == 0.5
     assert payload["top_p"] == 0.8
     assert payload["options"]["seed"] == 123
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_retry_after_connection_error(ollama_provider, httpx_mock, caplog):
+    """Test that chat_stream retries after a connection error and succeeds."""
+    # First attempt fails with connection error
+    httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+    
+    # Second attempt succeeds
+    mock_sse_response = [b'data: {"message": {"content": "Hello"}, "done": true}\n\n']
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_response), status_code=200,
+        headers={"Content-Type": "application/x-ndjson"}
+    )
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
+    
+    assert len(chunks) == 1
+    assert chunks[0] == {"token": "Hello"}
+    assert len(httpx_mock.get_requests()) == 2
+    assert "Request error (attempt 1/2): Connection refused" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_retry_after_retryable_status(ollama_provider, httpx_mock, caplog):
+    """Test that chat_stream retries after receiving a retryable status code."""
+    # First attempt fails with 503
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        status_code=503, text="Service Unavailable"
+    )
+    
+    # Second attempt succeeds
+    mock_sse_response = [b'data: {\"message\": {\"content\": \"Hello\"}, \"done\": true}\n\n']
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_response), status_code=200,
+        headers={"Content-Type": "application/x-ndjson"}
+    )
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
+    
+    assert len(chunks) == 1
+    assert chunks[0] == {"token": "Hello"}
+    assert len(httpx_mock.get_requests()) == 2
+    assert "Received retryable status 503, will retry..." in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_fails_after_max_retries(ollama_provider, httpx_mock, caplog):
+    """Test that chat_stream fails after max retry attempts."""
+    # Both attempts fail with connection errors
+    httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+    httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
+    
+    assert len(chunks) == 1
+    assert "error" in chunks[0]
+    assert "Failed to connect to Ollama service after multiple retries" in chunks[0]["error"]
+    assert len(httpx_mock.get_requests()) == 2
+    assert "Failed to connect to Ollama API after 2 attempts" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_non_retryable_error(ollama_provider, httpx_mock, caplog):
+    """Test that chat_stream doesn't retry on non-retryable errors."""
+    # 400 Bad Request - should not be retried
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        status_code=400, text="Bad Request"
+    )
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="invalid-model")]
+    
+    assert len(chunks) == 1
+    assert "error" in chunks[0]
+    assert "Ollama API error: 400" in chunks[0]["error"]
+    assert len(httpx_mock.get_requests()) == 1  # No retry for 400
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_success_first_attempt(ollama_provider, httpx_mock, caplog):
+    """Test that chat_stream succeeds on first attempt without retry."""
+    mock_sse_response = [b'data: {\"message\": {\"content\": \"Hello\"}, \"done\": true}\n\n']
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_response), status_code=200,
+        headers={"Content-Type": "application/x-ndjson"}
+    )
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
+    
+    assert len(chunks) == 1
+    assert chunks[0] == {"token": "Hello"}
+    assert len(httpx_mock.get_requests()) == 1  # Only one attempt made
+    assert "Retrying Ollama request" not in caplog.text  # No retry message

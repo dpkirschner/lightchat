@@ -1,15 +1,6 @@
 Epic 2: Core Chat Functionality (Backend)
 Goal: Implement the main chat streaming logic for configured providers.
 
-    LC-006: Implement Basic Chat Engine & Ollama Chat (SSE Streaming)
-        Description: Create backend/chat_engine.py. Implement chat_stream() in OllamaProvider to support Server-Sent Events (SSE). Create POST /chat endpoint in main.py that uses chat_engine.py to orchestrate the request to OllamaProvider and streams the response.
-        AC:
-            chat_engine.py created with a function to handle chat requests.
-            OllamaProvider.chat_stream() connects to Ollama's chat/generate endpoint and yields tokens.
-            POST /chat endpoint accepts {"prompt": "...", "provider_id": "...", "model_id": "..."}.
-            Endpoint returns text/event-stream with events like data: {"token": "..."}.
-            Pydantic models defined for /chat request and SSE data payload.
-
     LC-007: Enhance Chat Engine with Retry Logic
         Description: Update chat_engine.py or the provider implementations to include a simple retry mechanism (e.g., 1 retry with a short delay) for provider API calls.
         AC:
