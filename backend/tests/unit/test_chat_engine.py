@@ -1,11 +1,15 @@
 """Tests for the chat engine module."""
+# Standard library imports
+import logging
+
+# Third-party imports
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+# Local imports
 from backend.chat_engine import stream_chat_response, ProviderNotFoundError
 from backend.providers.ollama import OllamaProvider
 from backend.models.chat import ChatRequest
-from backend.models.schemas import SSEEvent
 
 # Mock message types for testing
 class MessageRole:
@@ -93,7 +97,6 @@ async def test_stream_chat_response_with_ollama(caplog):
         assert "system_prompt" in call_args[2]
         
         # Verify no errors were logged
-        import logging
         assert not any(record.levelno == logging.ERROR for record in caplog.records)
 
 

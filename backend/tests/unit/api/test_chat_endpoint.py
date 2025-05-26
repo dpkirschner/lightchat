@@ -1,20 +1,22 @@
 """Integration tests for the FastAPI endpoints using httpx.AsyncClient."""
+# Standard library imports
 import json
+import asyncio
+from typing import List, Dict, Any, AsyncGenerator, get_args
+
+# Third-party imports
 import pytest
-import pytest_asyncio # Import this
+import pytest_asyncio
 import httpx
 from fastapi import status
 from pydantic import ValidationError
-from typing import get_args, List, Dict, Any, AsyncGenerator
-
 from unittest.mock import patch, MagicMock
 
+# Local imports
 from backend.main import app
 from backend.models.providers import ProviderMetadata, ProviderStatus
 from backend.models.chat import ChatRequest
-from backend.models.schemas import SSEEvent
-from backend.config import ProviderConfig
-from backend.config import AppConfig # Assuming mock_app_config is an AppConfig instance
+from backend.config import ProviderConfig, AppConfig
 
 # Session-scoped fixture for the FastAPI app
 @pytest.fixture(scope="session")

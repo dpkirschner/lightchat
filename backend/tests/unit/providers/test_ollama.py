@@ -1,12 +1,16 @@
 """Tests for the Ollama provider implementation."""
+# Standard library imports
 import json
 import logging
-from unittest.mock import patch, AsyncMock # AsyncMock might not be needed with httpx_mock
+
+# Third-party imports
 import pytest
 import httpx
-# from backend.models.providers import ModelInfo # Keeping as it was in your original
+from unittest.mock import patch, AsyncMock
 
+# Local imports
 from ....providers.ollama import OllamaProvider
+# from backend.models.providers import ModelInfo # Keeping as it was in your original
 
 
 # Sample response from Ollama's /api/tags endpoint

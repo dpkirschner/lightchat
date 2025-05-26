@@ -1,9 +1,13 @@
-import pytest
+# Standard library imports
 import os
+
+# Third-party imports
+import pytest
+import openai  # For error types and response model mocks
 from unittest.mock import patch, AsyncMock, MagicMock
 
+# Local imports
 from ....providers.openai import OpenAIProvider
-import openai # For error types and response model mocks
 
 # Define the static model list for comparison
 STATIC_MODEL_LIST = [
