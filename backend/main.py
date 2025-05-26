@@ -8,10 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from backend.models.providers import ModelInfo, ProviderMetadata, ProviderStatus, ProviderType
+from backend.models import ModelInfo, ProviderMetadata, ProviderStatus, ProviderType, ChatRequest, SSEEvent
 from backend.providers.ollama import OllamaProvider
 from backend.chat_engine import stream_chat_response
-from backend.models.providers import ChatRequest, SSEEvent
 from backend.config import load_app_config, AppConfig
 from backend.logger import setup_logging
 

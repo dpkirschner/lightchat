@@ -11,7 +11,7 @@ from typing import get_args, List, Dict, Any, AsyncGenerator # Ensure all are im
 from unittest.mock import patch, MagicMock # Use MagicMock for patching stream_chat_response
 
 from backend.main import app
-from backend.models.providers import ProviderMetadata, ProviderStatus, SSEEvent
+from backend.models import ProviderMetadata, ProviderStatus, SSEEvent
 
 # Asynchronous client fixture for all tests in this file
 @pytest_asyncio.fixture

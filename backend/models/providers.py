@@ -1,10 +1,10 @@
 """
-Pydantic models for LLM provider metadata, model information, and chat functionality.
+Pydantic models for LLM provider metadata and model information.
 """
-from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
+# Type aliases for better type hints
 ProviderType = Literal["local", "cloud"]
 ProviderStatus = Literal["configured", "needs_api_key", "unavailable"]
 
@@ -37,12 +37,13 @@ class ModelInfo(BaseModel):
         }
     )
 
+
 class ProviderMetadata(BaseModel):
     """Metadata for an LLM provider."""
-    id: str
-    name: str
-    type: ProviderType
-    status: ProviderStatus
+    id: str = Field(..., description="Unique identifier for the provider")
+    name: str = Field(..., description="Display name of the provider")
+    type: ProviderType = Field(..., description="Type of provider (local or cloud)")
+    status: ProviderStatus = Field(..., description="Current status of the provider")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -69,27 +70,13 @@ class ChatRequest(BaseModel):
         description="Additional provider-specific settings"
     )
 
-
-class SSEEvent(BaseModel):
-    """Model for Server-Sent Events (SSE) data payload."""
-    token: Optional[str] = Field(
-        None,
-        description="A chunk of the generated text response"
-    )
-    error: Optional[str] = Field(
-        None,
-        description="Error message if an error occurred"
-    )
-
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "token": "Hello, how can I help you today?",
-                "error": None
-            },
-            "example_error": {
-                "token": None,
-                "error": "Failed to connect to provider"
+                "prompt": "Hello, how are you?",
+                "provider_id": "openai",
+                "model_id": "gpt-4",
+                "settings": {"temperature": 0.7}
             }
         }
     )

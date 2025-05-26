@@ -13,7 +13,7 @@ import asyncio
 from unittest.mock import patch, MagicMock # AsyncMock might not be needed if MagicMock's return is an async gen
 
 from backend.main import app
-from backend.models.providers import ProviderMetadata, ProviderStatus, SSEEvent # Ensure all are imported
+from backend.models import ProviderMetadata, ProviderStatus, SSEEvent  # Import from the main models package
 
 # Asynchronous client fixture for all async tests in this file
 @pytest_asyncio.fixture
