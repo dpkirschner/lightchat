@@ -20,6 +20,11 @@ app.add_middleware(
 async def read_root():
     return {"message": "LightChat Backend Active"}
 
+
+@app.get("/health", status_code=200)
+async def health_check():
+    return {"status": "ok"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)

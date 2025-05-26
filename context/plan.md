@@ -1,13 +1,6 @@
 Epic 1: Backend Foundation & Core Services
 Goal: Establish the basic backend server, configuration, and initial provider interfaces.
 
-
-    LC-003: Create Backend Health Check Endpoint
-        Description: Add a GET /health endpoint to the FastAPI app to allow monitoring of the backend's status.
-        AC:
-            GET /health endpoint implemented in backend/main.py.
-            Returns {"status": "ok"} with an HTTP 200 status code.
-
     LC-004: Define Provider Abstraction & /providers Metadata Endpoint
         Description: Create backend/providers/base.py with an abstract LLMProvider interface (methods: get_id(), get_name(), list_models(), chat_stream()). Implement GET /providers to return metadata for initially configured providers (read from settings.yaml's ProviderConfig list later, for now, can be hardcoded for one Ollama provider).
         AC:
