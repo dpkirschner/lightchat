@@ -3,21 +3,70 @@ import logging
 from typing import List, Optional, AsyncGenerator, Dict, Any
 import atexit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from backend.models import ModelInfo, ProviderMetadata, ProviderStatus, ProviderType, ChatRequest, SSEEvent
+from backend.models import ModelInfo, ProviderMetadata, ChatRequest, SSEEvent
 from backend.providers.ollama import OllamaProvider
+from backend.providers.openai import OpenAIProvider
 from backend.chat_engine import stream_chat_response
-from backend.config import load_app_config, AppConfig
+from backend.config import load_app_config, AppConfig, ProviderConfig
 from backend.logger import setup_logging
+from typing import Union, Optional
 
-logger = logging.getLogger(__name__)
+
+def get_provider_instance(provider_id: str, providers: List[ProviderConfig]) -> Union[OllamaProvider, OpenAIProvider]:
+    """Get an instance of the specified provider.
+    
+    Args:
+        provider_id: The ID of the provider to get an instance for
+        providers: List of provider configurations
+        
+    Returns:
+        An instance of the specified provider
+        
+    Raises:
+        KeyError: If the provider is not found or not properly configured
+    """
+    provider_config = next((p for p in providers if p.id == provider_id), None)
+    if not provider_config:
+        raise KeyError(f"Provider '{provider_id}' not found")
+        
+    if provider_config.type == "ollama":
+        if not provider_config.host:
+            raise ValueError(f"Ollama provider '{provider_id}' is missing required 'host' configuration")
+        return OllamaProvider(
+            provider_id=provider_config.id,
+            display_name=provider_config.name,
+            ollama_base_url=provider_config.host
+        )
+    elif provider_config.type == "openai":
+        if not provider_config.api_key:
+            raise ValueError(f"OpenAI provider '{provider_id}' is missing required 'api_key' configuration")
+        return OpenAIProvider(
+            provider_id=provider_config.id,
+            display_name=provider_config.name,
+            api_key=provider_config.api_key
+        )
+    else:
+        raise ValueError(f"Unsupported provider type: {provider_config.type}")
+
+logger = logging.getLogger("lightchat.main")
 
 # Global variable to hold the log listener
 log_listener = None
+
+# Global app config - initialized on first use
+_app_config = None
+
+def get_app_config() -> AppConfig:
+    """Get the application configuration, loading it if necessary."""
+    global _app_config
+    if _app_config is None:
+        _app_config = load_app_config()
+    return _app_config
 
 app = FastAPI(
     title="LightChat API",
@@ -49,7 +98,10 @@ async def health_check():
     description="Returns a list of models available from the specified provider.",
     response_description="A list of model information objects"
 )
-async def list_models(provider_id: str) -> List[ModelInfo]:
+async def list_models(
+    provider_id: str,
+    config: AppConfig = Depends(get_app_config)
+) -> List[ModelInfo]:
     """
     List all available models from the specified provider.
     
@@ -60,21 +112,34 @@ async def list_models(provider_id: str) -> List[ModelInfo]:
         List[ModelInfo]: A list of model information objects
         
     Raises:
-        HTTPException: If the provider is not found
+        HTTPException: If the provider is not found or not configured
     """
-    # For now, we only support the hardcoded Ollama provider
-    if provider_id == "ollama_default":
-        provider = OllamaProvider(
-            provider_id="ollama_default",
-            display_name="Ollama"
-        )
+    try:
+        # Get the provider instance
+        provider = get_provider_instance(provider_id, config.providers)
+        
+        # Get and return the list of models
         models_data = await provider.list_models()
         return [ModelInfo(**model_data) for model_data in models_data]
-    
-    raise HTTPException(
-        status_code=404,
-        detail=f"Provider '{provider_id}' not found"
-    )
+        
+    except KeyError as e:
+        logger.warning(f"Provider '{provider_id}' not found in configuration")
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
+    except ValueError as e:
+        logger.error(f"Configuration error for provider '{provider_id}': {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error listing models for provider '{provider_id}': {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error listing models: {str(e)}"
+        )
 
 
 @app.get(
@@ -84,37 +149,79 @@ async def list_models(provider_id: str) -> List[ModelInfo]:
     description="Returns metadata for all configured LLM providers.",
     response_description="A list of provider metadata objects"
 )
-async def get_providers() -> List[ProviderMetadata]:
+async def get_providers(
+    config: AppConfig = Depends(get_app_config)
+) -> List[ProviderMetadata]:
     """
     Retrieve metadata for all configured LLM providers.
     
-    For now, returns a hardcoded list with a single Ollama provider.
-    In future implementations, this will be dynamically generated from configuration.
+    Returns:
+        List[ProviderMetadata]: A list of provider metadata objects with status
     """
-    return [
-        ProviderMetadata(
-            id="ollama_default",
-            name="Ollama",
-            type="local",
-            status="configured"
+    providers_metadata = []
+    
+    # Debug log the providers in the config
+    logger.debug(f"Found {len(config.providers)} providers in config: {[p.id for p in config.providers]}")
+    
+    for provider in config.providers:
+        # Default status is configured
+        status: str = "configured"
+        
+        # Check provider-specific requirements
+        if provider.type == "openai" and not provider.api_key:
+            status = "needs_api_key"
+        elif provider.type == "ollama" and not provider.host:
+            status = "unavailable"
+        
+        # Map provider type to the expected ProviderType
+        provider_type: str = "cloud" if provider.type == "openai" else "local"
+        
+        # Create the provider metadata
+        provider_meta = ProviderMetadata(
+            id=provider.id,
+            name=provider.name,
+            type=provider_type,  # type: ignore[arg-type]
+            status=status  # type: ignore[arg-type]
         )
-    ]
+        
+        providers_metadata.append(provider_meta)
+        logger.debug(f"Added provider: {provider_meta}")
+    
+    logger.debug(f"Returning {len(providers_metadata)} configured providers")
+    return providers_metadata
 
-async def chat_event_generator(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, str], None]:
+async def chat_event_generator(
+    chat_request: ChatRequest,
+    config: AppConfig = Depends(get_app_config)
+) -> AsyncGenerator[Dict[str, str], None]:
     """Generate SSE events from the chat stream.
     
     Args:
         chat_request: The chat request data
+        config: The application configuration
         
     Yields:
         Dict with 'data' key containing the JSON-encoded event
     """
     try:
+        # Log the chat request
+        logger.info(
+            "Processing chat request",
+            extra={
+                "event": "chat_request_received",
+                "provider_id": chat_request.provider_id,
+                "model_id": chat_request.model_id,
+                "has_settings": bool(chat_request.settings)
+            }
+        )
+        
+        # Stream the chat response
         async for event_data_dict in stream_chat_response(
             prompt=chat_request.prompt,
             provider_id=chat_request.provider_id,
             model_id=chat_request.model_id,
-            settings=chat_request.settings
+            settings=chat_request.settings or {},
+            app_config=config
         ):
             sse_event = SSEEvent(**event_data_dict)
             current_event_type = "error" if sse_event.error else "message"
@@ -166,16 +273,14 @@ async def chat_endpoint(chat_request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-
-    # Load application configuration
-    app_config = load_app_config()
-
+    
     # Initialize our custom logging system
     # Note: setup_logging configures the 'lightchat' logger.
     # Logs from other modules (like uvicorn or FastAPI) won't go through this
     # unless they are configured to use a child of 'lightchat' or the root logger
     # is also configured with these handlers (which logger.py currently doesn't do).
-    if app_config.logging_enabled: # Assuming we might want to disable it via config later
+    app_config = get_app_config()
+    if app_config.logging_enabled:  # Assuming we might want to disable it via config later
         log_listener_instance = setup_logging(app_config)
         
         # Store the listener globally so it can be stopped
@@ -184,17 +289,41 @@ if __name__ == "__main__":
         # Get the application-specific logger instance
         lightchat_logger = logging.getLogger("lightchat")
 
-        # Log application start
+        # Log application start with provider info
+        provider_info = [
+            f"{p.type} ({p.id}): {p.name}" 
+            for p in app_config.providers
+        ]
+        
         lightchat_logger.info(
             "LightChat backend starting...", 
-            extra={'event_type': 'application_startup'}
+            extra={
+                'event': 'application_startup',
+                'provider_count': len(app_config.providers),
+                'providers': provider_info,
+                'default_provider': app_config.default_provider
+            }
         )
-
-        # Example error log
-        lightchat_logger.error(
-            "This is a test error log message during startup.", 
-            extra={'event_type': 'test_error_log'}
-        )
+        
+        # Log provider configuration status
+        for provider in app_config.providers:
+            status = "configured"
+            if provider.type == "openai" and not provider.api_key:
+                status = "needs_api_key"
+            elif provider.type == "ollama" and not provider.host:
+                status = "needs_configuration"
+                
+            lightchat_logger.info(
+                f"Provider configured: {provider.id}",
+                extra={
+                    'event': 'provider_config_status',
+                    'provider_id': provider.id,
+                    'provider_type': provider.type,
+                    'status': status,
+                    'has_host': bool(provider.host),
+                    'has_api_key': bool(provider.api_key)
+                }
+            )
 
         # Register shutdown handler
         def shutdown_logging():
@@ -219,6 +348,13 @@ if __name__ == "__main__":
     # It's separate from our application's 'lightchat' logger.
     # We remove the generic logging.basicConfig that was here before.
     # logger = logging.getLogger("uvicorn") # This line is fine if you want to reference uvicorn's logger
+    
+    # Log startup complete
+    lightchat_logger = logging.getLogger("lightchat")
+    lightchat_logger.info(
+        "LightChat backend ready", 
+        extra={'event': 'application_ready'}
+    )
     
     uvicorn.run(
         "backend.main:app",

@@ -26,12 +26,29 @@ class OpenAIProvider(LLMProvider):
         return self.display_name
 
     async def list_models(self) -> List[Dict[str, Any]]:
-        # Implementation for list_models will go here
-        # Static list as per requirements
+        # Static list as per requirements with required fields for ModelInfo
         static_models = [
-            {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "owned_by": "openai", "created_at": 0},
-            {"id": "gpt-4", "name": "GPT-4", "owned_by": "openai", "created_at": 0},
-            {"id": "gpt-4-turbo-preview", "name": "GPT-4 Turbo Preview", "owned_by": "openai", "created_at": 0}
+            {
+                "id": "gpt-3.5-turbo", 
+                "name": "GPT-3.5 Turbo", 
+                "modified_at": "2023-01-01T00:00:00Z",
+                "size": 1000000000,  # 1GB
+                "parameter_size": "175B"
+            },
+            {
+                "id": "gpt-4", 
+                "name": "GPT-4", 
+                "modified_at": "2023-01-01T00:00:00Z",
+                "size": 1000000000,  # 1GB
+                "parameter_size": "1.8T"
+            },
+            {
+                "id": "gpt-4-turbo-preview", 
+                "name": "GPT-4 Turbo Preview", 
+                "modified_at": "2023-01-01T00:00:00Z",
+                "size": 1000000000,  # 1GB
+                "parameter_size": "1.8T"
+            }
         ]
 
         if not self.client:
@@ -44,9 +61,10 @@ class OpenAIProvider(LLMProvider):
             for model in models_page.data:
                 transformed_models.append({
                     "id": model.id,
-                    "name": model.id, # Or a more descriptive name if available and desired
-                    "owned_by": model.owned_by,
-                    "created_at": model.created # Ensure this is an int timestamp
+                    "name": model.id,  # Or a more descriptive name if available
+                    "modified_at": "2023-01-01T00:00:00Z",  # Default value since this isn't available in the API
+                    "size": 1000000000,  # Default size in bytes (1GB)
+                    "parameter_size": "1.8T"  # Default parameter size
                 })
             return transformed_models
         except openai.APIConnectionError as e:

@@ -2,14 +2,15 @@
 Chat engine module for handling chat interactions with different LLM providers.
 """
 import logging
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional, List
 
-# Assuming your providers are in a 'providers' subdirectory relative to this file
+# Import providers
 from .providers.ollama import OllamaProvider
-# from .providers.openai import OpenAIProvider # Example for future
-# from .providers.base import LLMProvider # Example if you have a base class
+from .providers.openai import OpenAIProvider
+from .config import AppConfig, ProviderConfig
 
-logger = logging.getLogger(__name__)
+# Get logger instance
+logger = logging.getLogger("lightchat.chat_engine")
 
 
 class ProviderNotFoundError(Exception):
@@ -21,7 +22,8 @@ async def stream_chat_response(
     prompt: str,
     provider_id: str,
     model_id: Optional[str] = None,
-    settings: Optional[Dict[str, Any]] = None
+    settings: Optional[Dict[str, Any]] = None,
+    app_config: Optional[AppConfig] = None
 ) -> AsyncGenerator[Dict[str, str], None]:
     """Stream chat response from the specified provider.
     
@@ -30,49 +32,170 @@ async def stream_chat_response(
         provider_id: Identifier for the provider to use (e.g., 'ollama_default')
         model_id: Optional model ID to use for the request
         settings: Optional provider-specific settings for the chat request
+        app_config: Optional AppConfig instance for provider configuration
         
     Yields:
         Dict[str, str]: Chunks of the chat response in the format {"token": "..."}
         or error messages in the format {"error": "..."}
     """
-    provider: Any = None # Initialize with a type hint if you have a base LLMProvider class
+    # Log the incoming request
+    logger.info(
+        "Processing chat request",
+        extra={
+            "event": "chat_request_start",
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "prompt_length": len(prompt),
+            "has_settings": settings is not None
+        }
+    )
 
-    # Provider selection logic
-    # This will expand as you add more providers
-    if provider_id == "ollama_default":
-        provider = OllamaProvider(
-            provider_id="ollama_default", # This ID should match what this engine expects
-            display_name="Ollama",
-            ollama_base_url="http://localhost:11434" # Consider making this configurable
-        )
-    # Example for another provider:
-    # elif provider_id == "openai_default":
-    #     provider = OpenAIProvider(
-    #         provider_id="openai_default",
-    #         display_name="OpenAI",
-    #         api_key="YOUR_API_KEY_FROM_CONFIG_OR_ENV"
-    #     )
-    else:
-        error_msg = f"Provider '{provider_id}' not recognized."
-        logger.error(error_msg)
+    # Get provider configuration
+    if app_config is None:
+        from .config import load_app_config
+        app_config = load_app_config()
+    
+    provider_config = app_config.get_provider(provider_id)
+    if not provider_config:
+        error_msg = f"Provider '{provider_id}' not found in configuration."
+        logger.error(error_msg, extra={"event": "provider_not_found", "provider_id": provider_id})
         yield {"error": error_msg}
         return
 
-    # Stream response from the selected provider
+    # Initialize the provider based on configuration
+    provider = None
     try:
-        # Cleaner way: Directly iterate, assuming provider.chat_stream()
-        # returns an async generator object as per its contract.
-        async for event_data in provider.chat_stream(prompt, model_id, settings):
+        if provider_config.type == "ollama":
+            if not provider_config.host:
+                error_msg = f"Ollama provider '{provider_id}' is missing required 'host' configuration."
+                logger.error(error_msg, extra={"event": "provider_config_error", "provider_id": provider_id})
+                yield {"error": error_msg}
+                return
+                
+            provider = OllamaProvider(
+                provider_id=provider_config.id,
+                display_name=provider_config.name,
+                ollama_base_url=provider_config.host
+            )
+            
+        elif provider_config.type == "openai":
+            if not provider_config.api_key:
+                error_msg = f"OpenAI provider '{provider_id}' is missing required 'api_key' configuration."
+                logger.error(error_msg, extra={"event": "provider_config_error", "provider_id": provider_id})
+                yield {"error": error_msg}
+                return
+                
+            provider = OpenAIProvider(
+                provider_id=provider_config.id,
+                display_name=provider_config.name,
+                api_key=provider_config.api_key
+            )
+        else:
+            error_msg = f"Unsupported provider type: {provider_config.type}"
+            logger.error(error_msg, extra={"event": "unsupported_provider_type", "provider_type": provider_config.type})
+            yield {"error": error_msg}
+            return
+            
+        # Log the provider initialization
+        logger.debug(
+            f"Initialized {provider_config.type} provider: {provider_id}",
+            extra={
+                "event": "provider_initialized",
+                "provider_id": provider_id,
+                "provider_type": provider_config.type
+            }
+        )
+        
+        # Prepare settings for the provider
+        provider_settings = settings or {}
+        if provider_config.system_prompt and "system_prompt" not in provider_settings:
+            provider_settings["system_prompt"] = provider_config.system_prompt
+            
+        # Use default model if none provided
+        model_to_use = model_id or provider_config.default_model
+        if not model_to_use:
+            error_msg = f"No model_id provided and no default_model configured for provider: {provider_id}"
+            logger.error(error_msg, extra={"event": "missing_model_id", "provider_id": provider_id})
+            yield {"error": error_msg}
+            return
+            
+        # Log the start of the chat stream
+        logger.info(
+            "Starting chat stream",
+            extra={
+                "event": "chat_stream_start",
+                "provider_id": provider_id,
+                "model_id": model_to_use,
+                "has_system_prompt": "system_prompt" in provider_settings
+            }
+        )
+        
+        # Stream the response
+        response_tokens = []
+        has_error = False
+        
+        async for event_data in provider.chat_stream(prompt, model_to_use, provider_settings):
+            if "error" in event_data:
+                logger.error(
+                    "Error in chat stream",
+                    extra={
+                        "event": "chat_stream_error",
+                        "provider_id": provider_id,
+                        "model_id": model_to_use,
+                        "error": event_data["error"]
+                    }
+                )
+                has_error = True
+            elif "token" in event_data:
+                response_tokens.append(event_data["token"])
+                
             yield event_data
+            
+        # Log the completion of the chat stream
+        if has_error:
+            logger.warning(
+                "Chat stream completed with errors",
+                extra={
+                    "event": "chat_stream_complete_with_errors",
+                    "provider_id": provider_id,
+                    "model_id": model_to_use,
+                    "response_length": len("".join(response_tokens))
+                }
+            )
+        else:
+            logger.info(
+                "Chat stream completed successfully",
+                extra={
+                    "event": "chat_stream_complete",
+                    "provider_id": provider_id,
+                    "model_id": model_to_use,
+                    "response_length": len("".join(response_tokens))
+                }
+            )
+            
     except NotImplementedError as e:
-        # This handles cases where the provider's chat_stream is explicitly not implemented.
         error_msg = f"Chat stream not implemented for provider '{provider_id}'. Details: {str(e)}"
-        logger.warning(f"NotImplementedError from provider '{provider_id}': {str(e)}") # Log as warning
+        logger.error(
+            error_msg,
+            extra={
+                "event": "not_implemented_error",
+                "provider_id": provider_id,
+                "error": str(e)
+            },
+            exc_info=True
+        )
         yield {"error": error_msg}
+        
     except Exception as e:
-        # This catches other unexpected errors from the provider's stream.
-        error_msg = f"Error streaming from provider '{provider_id}': {str(e)}"
-        logger.error(error_msg, exc_info=True) # Log with traceback for debugging
-        # Yielding the full str(e) can be useful for debugging but consider if it's too verbose for clients.
-        # You might prefer a more generic message for the client in some cases.
+        error_msg = f"Error in chat stream for provider '{provider_id}': {str(e)}"
+        logger.error(
+            error_msg,
+            extra={
+                "event": "chat_stream_error",
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "error": str(e)
+            },
+            exc_info=True
+        )
         yield {"error": error_msg}

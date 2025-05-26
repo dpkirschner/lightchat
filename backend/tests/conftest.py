@@ -66,3 +66,33 @@ def mock_chat_engine():
     """Mock the chat_engine module for testing."""
     with patch('backend.main.chat_engine') as mock_chat_engine:
         yield mock_chat_engine
+
+
+@pytest.fixture
+def mock_app_config(app_config):
+    """Create a mock app config for testing with a temporary directory."""
+    # Create a mock app config with test settings
+    from backend.config import ProviderConfig
+    
+    mock_config = AppConfig(
+        default_provider="ollama_default",
+        providers=[
+            ProviderConfig(
+                id="ollama_default",
+                name="Ollama",
+                type="ollama",
+                host="http://localhost:11434"
+            ),
+            ProviderConfig(
+                id="openai_default",
+                name="OpenAI",
+                type="openai",
+                api_key="test_key"
+            )
+        ],
+        log_dir=app_config.log_dir,
+        data_dir=app_config.data_dir,
+        logging_enabled=True,
+        debug=True
+    )
+    return mock_config

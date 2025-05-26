@@ -7,9 +7,27 @@ import openai # For error types and response model mocks
 
 # Define the static model list for comparison
 STATIC_MODEL_LIST = [
-    {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "owned_by": "openai", "created_at": 0},
-    {"id": "gpt-4", "name": "GPT-4", "owned_by": "openai", "created_at": 0},
-    {"id": "gpt-4-turbo-preview", "name": "GPT-4 Turbo Preview", "owned_by": "openai", "created_at": 0}
+    {
+        "id": "gpt-3.5-turbo",
+        "name": "GPT-3.5 Turbo",
+        "modified_at": "2023-01-01T00:00:00Z",
+        "size": 1000000000,
+        "parameter_size": "175B"
+    },
+    {
+        "id": "gpt-4",
+        "name": "GPT-4",
+        "modified_at": "2023-01-01T00:00:00Z",
+        "size": 1000000000,
+        "parameter_size": "1.8T"
+    },
+    {
+        "id": "gpt-4-turbo-preview",
+        "name": "GPT-4 Turbo Preview",
+        "modified_at": "2023-01-01T00:00:00Z",
+        "size": 1000000000,
+        "parameter_size": "1.8T"
+    }
 ]
 
 @pytest.fixture
@@ -75,8 +93,8 @@ async def test_list_models_no_api_key(provider_details, capsys):
 async def test_list_models_success(provider_details, mock_openai_client):
     # Mock the API response
     mock_model_data = [
-        MagicMock(id="gpt-custom-1", owned_by="test_org", created=1678886400),
-        MagicMock(id="gpt-custom-2", owned_by="openai", created=1678886401),
+        MagicMock(id="gpt-custom-1", name="gpt-custom-1"),
+        MagicMock(id="gpt-custom-2", name="gpt-custom-2"),
     ]
     mock_models_page = MagicMock()
     mock_models_page.data = mock_model_data
@@ -87,8 +105,20 @@ async def test_list_models_success(provider_details, mock_openai_client):
         models = await provider.list_models()
 
     expected_models = [
-        {"id": "gpt-custom-1", "name": "gpt-custom-1", "owned_by": "test_org", "created_at": 1678886400},
-        {"id": "gpt-custom-2", "name": "gpt-custom-2", "owned_by": "openai", "created_at": 1678886401},
+        {
+            "id": "gpt-custom-1",
+            "name": "gpt-custom-1",
+            "modified_at": "2023-01-01T00:00:00Z",
+            "size": 1000000000,
+            "parameter_size": "1.8T"
+        },
+        {
+            "id": "gpt-custom-2",
+            "name": "gpt-custom-2",
+            "modified_at": "2023-01-01T00:00:00Z",
+            "size": 1000000000,
+            "parameter_size": "1.8T"
+        }
     ]
     assert models == expected_models
     mock_openai_client.models.list.assert_awaited_once()

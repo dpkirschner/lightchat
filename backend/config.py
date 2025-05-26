@@ -1,7 +1,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
@@ -12,6 +12,38 @@ logger = logging.getLogger(__name__)
 APP_NAME = "LightChat"
 APP_AUTHOR = "SudoSynthesis.dev"
 
+
+class ProviderConfig(BaseModel):
+    """Configuration for an LLM provider."""
+    id: str = Field(
+        ...,
+        description="A unique identifier for this provider configuration"
+    )
+    name: str = Field(
+        ...,
+        description="A user-friendly display name for this provider"
+    )
+    type: Literal["ollama", "openai"] = Field(
+        ...,
+        description="The type of the provider"
+    )
+    api_key: Optional[str] = Field(
+        None,
+        description="API key for the provider (required for OpenAI)"
+    )
+    host: Optional[str] = Field(
+        None,
+        description="Host URL for the provider (required for Ollama)"
+    )
+    system_prompt: Optional[str] = Field(
+        None,
+        description="Default system prompt for this provider"
+    )
+    default_model: Optional[str] = Field(
+        None,
+        description="Default model to use if not specified in the request"
+    )
+
 class AppConfig(BaseModel):
     """Application configuration model.
     
@@ -21,6 +53,11 @@ class AppConfig(BaseModel):
     default_provider: Optional[str] = Field(
         default=None,
         description="Default LLM provider ID. This ID is used to identify a specific provider configuration."
+    )
+    
+    providers: List[ProviderConfig] = Field(
+        default_factory=list,
+        description="List of configured LLM providers"
     )
     
     log_dir: str = Field(
@@ -42,6 +79,20 @@ class AppConfig(BaseModel):
         default=False,
         description="Whether debug mode is enabled for the application."
     )
+    
+    def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:
+        """Get a provider configuration by ID.
+        
+        Args:
+            provider_id: The ID of the provider to get
+            
+        Returns:
+            ProviderConfig or None if not found
+        """
+        for provider in self.providers:
+            if provider.id == provider_id:
+                return provider
+        return None
 
 
 def get_config_path() -> Path:
