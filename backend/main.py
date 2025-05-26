@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List
+
+from backend.models.providers import ProviderMetadata, ProviderStatus, ProviderType
 
 app = FastAPI(
     title="LightChat API",
@@ -24,6 +27,30 @@ async def read_root():
 @app.get("/health", status_code=200)
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get(
+    "/providers",
+    response_model=List[ProviderMetadata],
+    summary="List available LLM providers",
+    description="Returns metadata for all configured LLM providers.",
+    response_description="A list of provider metadata objects"
+)
+async def get_providers() -> List[ProviderMetadata]:
+    """
+    Retrieve metadata for all configured LLM providers.
+    
+    For now, returns a hardcoded list with a single Ollama provider.
+    In future implementations, this will be dynamically generated from configuration.
+    """
+    return [
+        ProviderMetadata(
+            id="ollama_default",
+            name="Ollama",
+            type="local",
+            status="configured"
+        )
+    ]
 
 if __name__ == "__main__":
     import uvicorn
