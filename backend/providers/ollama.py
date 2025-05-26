@@ -77,80 +77,75 @@ class OllamaProvider(LLMProvider):
         if settings:
             payload.update(settings)
 
-        response_obj: Optional[httpx.Response] = None # Define for finally block
+        client = None
+        response = None
         try:
-            async with httpx.AsyncClient() as client:
-                response_obj = await client.post(url, json=payload, timeout=None)
-                # Manually manage the response lifecycle instead of 'async with response_obj'
-                try:
-                    response_obj.raise_for_status()
-                    buffer = ""
-                    async for raw_chunk in response_obj.aiter_text():
-                        buffer += raw_chunk
-                        while '\n' in buffer:
-                            line, buffer = buffer.split('\n', 1)
-                            line = line.strip()
+            client = httpx.AsyncClient()
+            response = await client.post(url, json=payload, timeout=None)
+            response.raise_for_status()
+            
+            buffer = ""
+            async for raw_chunk in response.aiter_text():
+                buffer += raw_chunk
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    line = line.strip()
 
-                            if not line:
-                                continue
+                    if not line:
+                        continue
 
-                            if line.startswith('data: '):
-                                json_str = line[len('data: '):].strip()
-                                if not json_str:
-                                    continue
-                                if json_str == "[DONE]":
-                                    logger.debug("Ollama stream: [DONE] signal received.")
-                                    return 
-                            elif line.startswith(':'):
-                                logger.debug(f"Ollama stream: Comment: {line}")
-                                continue
-                            else:
-                                logger.debug(f"Ollama stream: Skipping non-data line: {line}")
-                                continue
+                    if line.startswith('data: '):
+                        json_str = line[len('data: '):].strip()
+                        if not json_str:
+                            continue
+                        if json_str == "[DONE]":
+                            logger.debug("Ollama stream: [DONE] signal received.")
+                            return 
+                    elif line.startswith(':'):
+                        logger.debug(f"Ollama stream: Comment: {line}")
+                        continue
+                    else:
+                        logger.debug(f"Ollama stream: Skipping non-data line: {line}")
+                        continue
 
-                            try:
-                                data = json.loads(json_str)
-                                
-                                # 1. Check for and yield content first
-                                if "message" in data and "content" in data["message"]:
-                                    content = data["message"]["content"]
-                                    if content:
-                                        yield {"token": content}
-                                
-                                # 2. Then, check for an error from Ollama in this message
-                                if "error" in data:
-                                    ollama_error_msg = data['error']
-                                    logger.error(f"Ollama API error in stream: {ollama_error_msg}")
-                                    yield {"error": f"Ollama API error: {ollama_error_msg}"}
-                                    return # Stop generation on error from Ollama
+                    try:
+                        data = json.loads(json_str)
+                        
+                        # 1. Check for and yield content first
+                        if "message" in data and "content" in data["message"]:
+                            content = data["message"]["content"]
+                            if content:
+                                yield {"token": content}
+                        
+                        # 2. Then, check for an error from Ollama in this message
+                        if "error" in data:
+                            ollama_error_msg = data['error']
+                            logger.error(f"Ollama API error in stream: {ollama_error_msg}")
+                            yield {"error": f"Ollama API error: {ollama_error_msg}"}
+                            return  # Stop generation on error from Ollama
 
-                                # 3. Finally, check if this message indicates the stream is done
-                                if data.get("done"): 
-                                    logger.debug("Ollama stream: 'done: true' signal received.")
-                                    return # Now, this return happens AFTER content (if any) is yielded
+                        # 3. Finally, check if this message indicates the stream is done
+                        if data.get("done"): 
+                            logger.debug("Ollama stream: 'done: true' signal received.")
+                            return  # Now, this return happens AFTER content (if any) is yielded
 
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to parse Ollama JSON response line: '{json_str}'. Error: {str(e)}")
-                                yield {"error": "Failed to parse Ollama stream response"}
-                                return
-                            except Exception as e:
-                                logger.error(f"Error processing Ollama stream data: '{json_str}'. Error: {str(e)}", exc_info=True)
-                                yield {"error": "Error processing Ollama stream data"}
-                                return
-                    if buffer.strip():
-                        logger.debug(f"Ollama stream: Trailing buffer content: {buffer.strip()}")
-                finally:
-                    if response_obj is not None:
-                        await response_obj.aclose() # Ensure the response is closed
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse Ollama JSON response line: '{json_str}'. Error: {str(e)}")
+                        yield {"error": "Failed to parse Ollama stream response"}
+                        return
+                    except Exception as e:
+                        logger.error(f"Error processing Ollama stream data: '{json_str}'. Error: {str(e)}", exc_info=True)
+                        yield {"error": "Error processing Ollama stream data"}
+                        return
+            
+            if buffer.strip():
+                logger.debug(f"Ollama stream: Trailing buffer content: {buffer.strip()}")
 
         except httpx.RequestError as e:
             error_msg = f"Failed to connect to Ollama API at {url} for chat_stream: {str(e)}"
             logger.error(error_msg)
             yield {"error": "Failed to connect to Ollama service"}
         except httpx.HTTPStatusError as e:
-            # This block might be hit if response_obj.raise_for_status() is outside the new try/finally
-            # or if client.post itself fails with HTTPStatusError before streaming.
-            # The current structure has raise_for_status inside the try/finally that calls aclose.
             error_msg = f"Ollama API returned HTTP error for chat_stream: {e.response.status_code} - {e.response.text}"
             logger.error(error_msg)
             yield {"error": f"Ollama API error: {e.response.status_code}"}
@@ -158,3 +153,12 @@ class OllamaProvider(LLMProvider):
             error_msg = f"Unexpected error in Ollama chat stream: {str(e)}"
             logger.error(error_msg, exc_info=True)
             yield {"error": "An unexpected error occurred"}
+        finally:
+            # Ensure resources are properly cleaned up
+            try:
+                if response is not None:
+                    await response.aclose()
+                if client is not None:
+                    await client.aclose()
+            except Exception as e:
+                logger.error(f"Error cleaning up resources: {str(e)}", exc_info=True)

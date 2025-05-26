@@ -1,9 +1,18 @@
-from fastapi import FastAPI, HTTPException
+import json
+import logging
+from typing import List, Optional, AsyncGenerator, Dict, Any
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+from fastapi.responses import JSONResponse
+from sse_starlette.sse import EventSourceResponse
 
 from backend.models.providers import ModelInfo, ProviderMetadata, ProviderStatus, ProviderType
 from backend.providers.ollama import OllamaProvider
+from backend.chat_engine import stream_chat_response
+from backend.models.providers import ChatRequest, SSEEvent
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="LightChat API",
@@ -88,9 +97,72 @@ async def get_providers() -> List[ProviderMetadata]:
         )
     ]
 
+async def chat_event_generator(chat_request: ChatRequest) -> AsyncGenerator[Dict[str, str], None]:
+    """Generate SSE events from the chat stream.
+    
+    Args:
+        chat_request: The chat request data
+        
+    Yields:
+        Dict with 'data' key containing the JSON-encoded event
+    """
+    try:
+        async for event_data_dict in stream_chat_response(
+            prompt=chat_request.prompt,
+            provider_id=chat_request.provider_id,
+            model_id=chat_request.model_id,
+            settings=chat_request.settings
+        ):
+            sse_event = SSEEvent(**event_data_dict)
+            current_event_type = "error" if sse_event.error else "message"
+            yield {
+                "event": current_event_type,
+                "data": sse_event.model_dump_json()
+            }
+    except Exception as e:
+        logger.exception("Error in chat event generator")
+        # Send error as SSE event
+        error_event = SSEEvent(error=f"An error occurred: {str(e)}")
+        yield {
+            "event": "error",
+            "data": error_event.model_dump_json()
+        }
+
+
+@app.post(
+    "/chat",
+    response_class=EventSourceResponse,
+    summary="Stream chat completion",
+    description="Stream chat completion using the specified provider and model",
+    responses={
+        200: {
+            "content": {"text/event-stream": {}},
+            "description": "Stream of chat completion events",
+        }
+    }
+)
+async def chat_endpoint(chat_request: ChatRequest):
+    """Stream chat completion from the specified provider.
+    
+    Args:
+        chat_request: The chat request data
+        
+    Returns:
+        EventSourceResponse: Server-Sent Events stream
+    """
+    logger.info(f"Received chat request for provider: {chat_request.provider_id}")
+    
+    # Return the event source response
+    return EventSourceResponse(
+        chat_event_generator(chat_request),
+        media_type="text/event-stream",
+        ping=30,  # Send ping every 30 seconds to keep connection alive
+        ping_message_factory=lambda: {"event": "ping"}
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
-    import logging
     
     # Configure logging
     logging.basicConfig(level=logging.INFO)

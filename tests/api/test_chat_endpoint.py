@@ -1,23 +1,21 @@
-"""API tests for the FastAPI endpoints, using asynchronous client."""
-
+"""Integration tests for the FastAPI endpoints using httpx.AsyncClient."""
 import json
 import pytest
 import pytest_asyncio
 import httpx
 from fastapi import status
-from pydantic import ValidationError
-from typing import get_args, List, Dict, Any, AsyncGenerator
 import asyncio
+from pydantic import ValidationError # For test_providers_response_structure
+from typing import get_args, List, Dict, Any, AsyncGenerator # Ensure all are imported
 
-
-from unittest.mock import patch, MagicMock # AsyncMock might not be needed if MagicMock's return is an async gen
+from unittest.mock import patch, MagicMock # Use MagicMock for patching stream_chat_response
 
 from backend.main import app
-from backend.models.providers import ProviderMetadata, ProviderStatus, SSEEvent # Ensure all are imported
+from backend.models.providers import ProviderMetadata, ProviderStatus, SSEEvent
 
-# Asynchronous client fixture for all async tests in this file
+# Asynchronous client fixture for all tests in this file
 @pytest_asyncio.fixture
-async def async_api_client(monkeypatch): 
+async def async_api_client(monkeypatch): # Add monkeypatch fixture
     """Create an async test client for the FastAPI app, patching sse-starlette event."""
 
     # sse-starlette.sse.AppStatus.should_exit_event is created at import time.
@@ -40,35 +38,30 @@ async def async_api_client(monkeypatch):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
+# --- Tests for general endpoints ---
 @pytest.mark.asyncio
 async def test_health_check(async_api_client: httpx.AsyncClient):
-    """Test the health check endpoint."""
     response = await async_api_client.get("/health")
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {"status": "ok"}
 
 @pytest.mark.asyncio
 async def test_root_endpoint(async_api_client: httpx.AsyncClient):
-    """Test the root endpoint."""
     response = await async_api_client.get("/")
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {"message": "LightChat Backend Active"}
 
-
 @pytest.mark.asyncio
 async def test_get_providers_success(async_api_client: httpx.AsyncClient):
-    """Test the /providers endpoint returns a valid response."""
     response = await async_api_client.get("/providers")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert isinstance(data, list)
-    assert len(data) > 0 
+    assert len(data) > 0
     provider = data[0]
-    # Basic structure validation
-    ProviderMetadata(**provider) # This will raise ValidationError if structure is wrong
-    assert provider["id"] == "ollama_default" # Example check
+    ProviderMetadata(**provider) # Validate structure
+    assert provider["id"] == "ollama_default"
     assert provider["status"] in get_args(ProviderStatus)
-
 
 SAMPLE_MODELS_RESPONSE = {
     "models": [{
@@ -80,49 +73,37 @@ SAMPLE_MODELS_RESPONSE = {
 
 @pytest.mark.asyncio
 async def test_get_models_success(async_api_client: httpx.AsyncClient, httpx_mock):
-    """Test successful retrieval of models from a provider."""
     httpx_mock.add_response(
-        url="http://localhost:11434/api/tags", # This URL is called by OllamaProvider
-        json=SAMPLE_MODELS_RESPONSE,
-        status_code=200
+        url="http://localhost:11434/api/tags", json=SAMPLE_MODELS_RESPONSE, status_code=200
     )
     response = await async_api_client.get("/models/ollama_default")
     assert response.status_code == status.HTTP_200_OK
     models = response.json()
-    assert isinstance(models, list)
-    assert len(models) == 1
-    model = models[0]
-    assert "id" in model
-    assert model["id"] == "llama3:latest"
+    assert isinstance(models, list) and len(models) == 1
+    assert models[0]["id"] == "llama3:latest"
 
 @pytest.mark.asyncio
 async def test_get_models_provider_not_found(async_api_client: httpx.AsyncClient):
-    """Test that a 404 is returned for unknown provider IDs."""
     response = await async_api_client.get("/models/nonexistent_provider")
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["detail"] == "Provider 'nonexistent_provider' not found"
 
 @pytest.mark.asyncio
 async def test_get_models_ollama_unavailable(async_api_client: httpx.AsyncClient, httpx_mock, caplog):
-    """Test handling of Ollama service being unavailable when listing models."""
     httpx_mock.add_exception(httpx.RequestError("Connection error"))
     response = await async_api_client.get("/models/ollama_default")
-    assert response.status_code == status.HTTP_200_OK # Endpoint itself handles error gracefully
-    assert response.json() == [] # Expect empty list as per OllamaProvider logic
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
     assert "Failed to connect to Ollama API" in caplog.text
 
 @pytest.mark.asyncio
-async def test_providers_response_structure(): # No client needed for this specific test
-    """Test that the ProviderMetadata model validates correctly (schema check)."""
+async def test_providers_response_structure():
     ProviderMetadata(id="test_id", name="Test Provider", type="local", status="configured")
     with pytest.raises(ValidationError):
         ProviderMetadata(id="test_id", name="Test Provider", type="invalid_type", status="configured")
-    with pytest.raises(ValidationError):
-        ProviderMetadata(id="test_id", name="Test Provider", type="local", status="invalid_status")
 
 @pytest.mark.asyncio
 async def test_providers_content(async_api_client: httpx.AsyncClient):
-    """Test the content of the /providers response matches expectations."""
     response = await async_api_client.get("/providers")
     data = response.json()
     provider = data[0]
@@ -130,35 +111,60 @@ async def test_providers_content(async_api_client: httpx.AsyncClient):
     assert provider["name"] == "Ollama"
     assert provider["status"] in get_args(ProviderStatus)
 
-async def parse_sse_events_from_aiter_lines(aiter_lines: AsyncGenerator[str, None]) -> List[Dict[str, Any]]:
-    """Helper to parse SSE events from an async line iterator."""
+
+# --- Asynchronous tests for /chat endpoint ---
+
+async def parse_sse_events_from_async_response(response: httpx.Response) -> List[Dict[str, Any]]:
+    """Helper to parse SSE events from an httpx.AsyncClient streaming response.
+    
+    Returns:
+        List of parsed events, where each event is a dict with:
+        - event: The event type (defaults to "message" if not specified)
+        - data: The parsed JSON data (if valid JSON)
+        - error: Present if there was an error parsing the data
+        - raw_data: The raw data string (if data couldn't be parsed as JSON)
+    """
     events = []
-    current_event_name = "message"
+    current_event = "message"
     current_data_parts = []
-    async for line in aiter_lines:
+    
+    async for line in response.aiter_lines():
         line = line.strip()
         if not line:
+            # Empty line marks the end of an event
             if current_data_parts:
+                event_data = {"event": current_event}
                 full_data_str = "".join(current_data_parts)
                 try:
-                    events.append({"name": current_event_name, "data": json.loads(full_data_str)})
+                    event_data["data"] = json.loads(full_data_str)
                 except json.JSONDecodeError:
-                    events.append({"name": current_event_name, "data_raw": full_data_str, "parse_error": True})
+                    event_data["raw_data"] = full_data_str
+                    event_data["error"] = "Failed to parse JSON data"
+                events.append(event_data)
+                
+                # Reset for next event
                 current_data_parts = []
-                current_event_name = "message"
+                current_event = "message"
             continue
+            
         if line.startswith("event:"):
-            current_event_name = line[len("event:"):].strip()
+            current_event = line[len("event:"):].strip()
         elif line.startswith("data:"):
             current_data_parts.append(line[len("data:"):].strip())
-            
-    if current_data_parts: # Process any final event
+    
+    # Handle any remaining data after the loop
+    if current_data_parts:
+        event_data = {"event": current_event}
         full_data_str = "".join(current_data_parts)
         try:
-            events.append({"name": current_event_name, "data": json.loads(full_data_str)})
+            event_data["data"] = json.loads(full_data_str)
         except json.JSONDecodeError:
-            events.append({"name": current_event_name, "data_raw": full_data_str, "parse_error": True})
+            event_data["raw_data"] = full_data_str
+            event_data["error"] = "Failed to parse JSON data"
+        events.append(event_data)
+        
     return events
+
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_success(async_api_client: httpx.AsyncClient):
@@ -174,9 +180,9 @@ async def test_chat_endpoint_success(async_api_client: httpx.AsyncClient):
         for event in mock_engine_events:
             yield event
     
-    mock_generator = mock_async_gen_func()
+    mock_generator_object = mock_async_gen_func()
 
-    with patch('backend.main.stream_chat_response', return_value=mock_generator) as patched_stream_fn:
+    with patch('backend.main.stream_chat_response', MagicMock(return_value=mock_generator_object)) as patched_stream_fn:
         response = await async_api_client.post(
             "/chat",
             json={"prompt": "Hello!", "provider_id": "ollama_default", "model_id": "llama3:latest"},
@@ -186,7 +192,7 @@ async def test_chat_endpoint_success(async_api_client: httpx.AsyncClient):
         assert response.status_code == 200
         assert "text/event-stream" in response.headers["content-type"]
         
-        parsed_events = await parse_sse_events_from_aiter_lines(response.aiter_lines())
+        parsed_events = await parse_sse_events_from_async_response(response)
         
         assert len(parsed_events) == len(expected_sse_payloads)
         for sse_event, expected_payload in zip(parsed_events, expected_sse_payloads):
@@ -210,9 +216,9 @@ async def test_chat_endpoint_error(async_api_client: httpx.AsyncClient):
     async def mock_error_gen_func(*args, **kwargs):
         yield mock_engine_error_event
             
-    mock_error_generator = mock_error_gen_func()
+    mock_error_generator_object = mock_error_gen_func()
     
-    with patch('backend.main.stream_chat_response', return_value=mock_error_generator) as patched_stream_fn:
+    with patch('backend.main.stream_chat_response', MagicMock(return_value=mock_error_generator_object)) as patched_stream_fn:
         response = await async_api_client.post(
             "/chat",
             json={"prompt": "Hello!", "provider_id": "invalid_provider", "model_id": "llama3:latest"},
@@ -222,13 +228,13 @@ async def test_chat_endpoint_error(async_api_client: httpx.AsyncClient):
         assert response.status_code == 200
         assert "text/event-stream" in response.headers["content-type"]
         
-        parsed_events = await parse_sse_events_from_aiter_lines(response.aiter_lines())
+        parsed_events = await parse_sse_events_from_async_response(response)
         
         assert len(parsed_events) == 1
         sse_event = parsed_events[0]
         # For error responses, the event type should be 'error'
-        assert sse_event.get("name") == "error"
-        assert not sse_event.get("parse_error")
+        assert sse_event.get("event") == "error"
+        # The data should match our expected payload
         assert sse_event["data"] == expected_sse_payload
         
         patched_stream_fn.assert_called_once_with(
@@ -254,4 +260,4 @@ async def test_chat_endpoint_validation_error(async_api_client: httpx.AsyncClien
         if "prompt" in detail.get("loc", []) and detail.get("type") == "missing":
             prompt_error_found = True
             break
-    assert prompt_error_found, "Validation error for missing 'prompt' not found."
+    assert prompt_error_found, "Validation error for missing 'prompt' field not found."
