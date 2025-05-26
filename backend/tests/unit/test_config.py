@@ -77,7 +77,9 @@ def test_load_app_config_valid_file(mock_get_path):
         config = load_app_config()
         assert config.default_provider == "test_provider"
         assert config.log_dir == "/custom/log/dir"
+        assert "data" in config.data_dir  # Just check that it's a valid path
         assert config.logging_enabled is False
+        assert config.debug is False
 
 
 @patch('backend.config.get_config_path')
@@ -93,7 +95,9 @@ def test_load_app_config_empty_yaml_file(mock_get_path):
         assert isinstance(config, AppConfig)
         assert config.default_provider is AppConfig.model_fields['default_provider'].default
         assert config.log_dir
+        assert config.data_dir
         assert config.logging_enabled is AppConfig.model_fields['logging_enabled'].default
+        assert config.debug is AppConfig.model_fields['debug'].default
         mock_warning.assert_not_called()
 
 

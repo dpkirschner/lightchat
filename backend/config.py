@@ -28,9 +28,19 @@ class AppConfig(BaseModel):
         description="Directory where log files will be stored."
     )
     
+    data_dir: str = Field(
+        default_factory=lambda: str(Path(user_config_dir(APP_NAME, APP_AUTHOR)) / "data"),
+        description="Directory where application data will be stored."
+    )
+    
     logging_enabled: bool = Field(
         default=True,
         description="Whether logging is enabled for the application."
+    )
+    
+    debug: bool = Field(
+        default=False,
+        description="Whether debug mode is enabled for the application."
     )
 
 

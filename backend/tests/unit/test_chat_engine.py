@@ -2,36 +2,81 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from backend.chat_engine import stream_chat_response
+from backend.chat_engine import stream_chat_response, ProviderNotFoundError
 from backend.providers.ollama import OllamaProvider
+from backend.models.chat import ChatRequest
+from backend.models.schemas import SSEEvent
+
+# Mock message types for testing
+class MessageRole:
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+class ChatMessage:
+    def __init__(self, role, content):
+        self.role = role
+        self.content = content
+        
+    def to_dict(self):
+        return {"role": self.role, "content": self.content}
 
 
 @pytest.mark.asyncio
 async def test_stream_chat_response_with_ollama(caplog):
     """Test streaming chat response with Ollama provider."""
     
-    async def mock_ollama_stream_gen(*args, **kwargs): # Renamed for clarity
+    async def mock_ollama_stream_gen(*args, **kwargs):
         yield {"token": "Hello"}
         yield {"token": " there"}
         yield {"token": "!"}
 
     with patch('backend.chat_engine.OllamaProvider', spec=OllamaProvider) as mock_provider_class:
+        # Set up the mock provider instance
         mock_provider_instance = mock_provider_class.return_value
-        # Set return_value to an instance of the async generator
         mock_provider_instance.chat_stream.return_value = mock_ollama_stream_gen()
+        mock_provider_instance.provider_id = "ollama"
+        mock_provider_instance.display_name = "Ollama"
         
-        chunks = []
-        async for chunk in stream_chat_response("Hello!", "ollama_default", "llama3:latest"):
-            chunks.append(chunk)
+        # Create a test request
+        test_request = ChatRequest(
+            prompt="Test prompt",
+            provider_id="ollama_default",  # Match the expected provider_id
+            model_id="llama2",
+            settings={"temperature": 0.7}
+        )
         
-        assert chunks == [{"token": "Hello"}, {"token": " there"}, {"token": "!"}]
+        # Call the function under test
+        responses = []
+        async for chunk in stream_chat_response(
+            prompt=test_request.prompt,
+            provider_id=test_request.provider_id,
+            model_id=test_request.model_id,
+            settings=test_request.settings
+        ):
+            responses.append(chunk)
+            
+        # Verify the results
+        assert len(responses) == 3
+        assert responses[0]["token"] == "Hello"
+        assert responses[1]["token"] == " there"
+        assert responses[2]["token"] == "!"
         
+        # Verify the provider was created with the correct parameters
         mock_provider_class.assert_called_once_with(
             provider_id="ollama_default",
             display_name="Ollama",
             ollama_base_url="http://localhost:11434"
         )
-        mock_provider_instance.chat_stream.assert_called_once_with("Hello!", "llama3:latest", None)
+        
+        # Verify chat_stream was called with the correct arguments
+        mock_provider_instance.chat_stream.assert_called_once_with(
+            "Test prompt", 
+            "llama2", 
+            {"temperature": 0.7}
+        )
+        
+        # Verify no errors were logged
         assert not any(record.levelno == pytest.logging.ERROR for record in caplog.records)
 
 

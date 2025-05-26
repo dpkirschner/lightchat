@@ -2,7 +2,7 @@ import pytest
 import os
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from backend.providers.openai import OpenAIProvider
+from ....providers.openai import OpenAIProvider
 import openai # For error types and response model mocks
 
 # Define the static model list for comparison

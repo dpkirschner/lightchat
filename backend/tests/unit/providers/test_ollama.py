@@ -1,11 +1,12 @@
 """Tests for the Ollama provider implementation."""
 import json
+import logging
 from unittest.mock import patch, AsyncMock # AsyncMock might not be needed with httpx_mock
 import pytest
 import httpx
 # from backend.models.providers import ModelInfo # Keeping as it was in your original
 
-from backend.providers.ollama import OllamaProvider
+from ....providers.ollama import OllamaProvider
 
 
 # Sample response from Ollama's /api/tags endpoint
@@ -145,15 +146,33 @@ async def test_list_models_malformed_json_response(ollama_provider, httpx_mock, 
 
 @pytest.mark.asyncio
 async def test_list_models_invalid_response_structure(ollama_provider, httpx_mock, caplog):
-    """Test handling of valid JSON but unexpected structure (e.g., missing 'models' key)."""
+    """Test that a missing 'models' key in a valid JSON 200 response is handled gracefully."""
     httpx_mock.add_response(
         url=f"{ollama_provider.ollama_base_url}/api/tags",
-        json={"some_other_key": "data"}, 
+        json={"some_other_key": "data"}, # Missing 'models' key
         status_code=200
     )
-    models = await ollama_provider.list_models()
+
+    with caplog.at_level(logging.ERROR):
+        caplog.clear() 
+        models = await ollama_provider.list_models()
+
     assert models == []
-    assert not caplog.records 
+    error_messages_to_check = [
+        "Error processing Ollama API response", 
+        "Unexpected error fetching models",
+        "Failed to parse JSON response" 
+    ]
+    found_error_log = False
+    for record in caplog.records:
+        if record.levelno >= logging.ERROR: # Check for ERROR or CRITICAL logs
+            for msg_part in error_messages_to_check:
+                if msg_part in record.message:
+                    found_error_log = True
+                    break
+            if found_error_log:
+                break
+    assert not found_error_log, f"An unexpected error was logged: {caplog.text}" 
 
 @pytest.mark.asyncio
 async def test_list_models_with_missing_optional_fields(ollama_provider, httpx_mock):

@@ -2,6 +2,27 @@
 
 A real-time chat application built with FastAPI and modern web technologies.
 
+## 🧪 Testing
+
+To run the tests, first install the test dependencies:
+
+```bash
+cd backend
+pip install -r requirements-test.txt
+```
+
+Then run the tests with:
+
+```bash
+pytest
+```
+
+For more detailed output, use:
+
+```bash
+pytest -v --cov=backend --cov-report=term-missing
+```
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -58,3 +79,18 @@ lightchat/
 ## 📝 License
 
 This project is licensed under the MIT License.
+
+## Testing
+
+To run the tests, first install the test dependencies:
+
+
+
+Then run the tests with:
+
+
+
+For more detailed output, use:
+
+
+
