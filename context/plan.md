@@ -1,21 +1,6 @@
 Epic 2: Core Chat Functionality (Backend)
 Goal: Implement the main chat streaming logic for configured providers.
 
-    LC-007: Enhance Chat Engine with Retry Logic
-        Description: Update chat_engine.py or the provider implementations to include a simple retry mechanism (e.g., 1 retry with a short delay) for provider API calls.
-        AC:
-            Provider calls (e.g., to Ollama) are retried once on transient failures (e.g., network error, timeout).
-            Retry logic is configurable or clearly defined (e.g., 1 retry, 2s delay).
-
-    LC-008: Implement OpenAI Provider Adapter (Models & Streaming Chat)
-        Description: Create backend/providers/openai.py with OpenAIProvider. Implement list_models() (can return a fixed list or query OpenAI API) and chat_stream() using the OpenAI API for SSE. API key will be read from ProviderConfig (requires LC-010).
-        AC:
-            OpenAIProvider class created.
-            list_models() method implemented.
-            chat_stream() method correctly streams responses from OpenAI API.
-            Handles OpenAI API errors gracefully.
-            (Dependent on LC-010 for API key configuration).
-
 
 Epic 3: Logging & Full Configuration Management (Backend)
 Goal: Implement robust logging and full configuration capabilities including hot-reloading.
