@@ -38,15 +38,17 @@ async def stream_chat_response(
         Dict[str, str]: Chunks of the chat response in the format {"token": "..."}
         or error messages in the format {"error": "..."}
     """
-    # Log the incoming request
+    # Log the user prompt with full details
     logger.info(
-        "Processing chat request",
+        "User prompt received",
         extra={
-            "event": "chat_request_start",
+            "event": "user_prompt",
             "provider_id": provider_id,
             "model_id": model_id,
+            "prompt": prompt,
             "prompt_length": len(prompt),
-            "has_settings": settings is not None
+            "has_settings": settings is not None,
+            "settings": settings or {}
         }
     )
 
@@ -119,39 +121,62 @@ async def stream_chat_response(
             yield {"error": error_msg}
             return
             
-        # Log the start of the chat stream
+        # Log the start of the chat stream with model and settings
         logger.info(
             "Starting chat stream",
             extra={
                 "event": "chat_stream_start",
                 "provider_id": provider_id,
                 "model_id": model_to_use,
-                "has_system_prompt": "system_prompt" in provider_settings
+                "has_system_prompt": "system_prompt" in provider_settings,
+                "settings": provider_settings
             }
         )
         
         # Stream the response
         response_tokens = []
         has_error = False
+        error_details = None
         
-        async for event_data in provider.chat_stream(prompt, model_to_use, provider_settings):
-            if "error" in event_data:
-                logger.error(
-                    "Error in chat stream",
-                    extra={
-                        "event": "chat_stream_error",
-                        "provider_id": provider_id,
-                        "model_id": model_to_use,
-                        "error": event_data["error"]
-                    }
-                )
-                has_error = True
-            elif "token" in event_data:
-                response_tokens.append(event_data["token"])
+        try:
+            async for event_data in provider.chat_stream(prompt, model_to_use, provider_settings):
+                if "error" in event_data:
+                    error_msg = event_data["error"]
+                    logger.error(
+                        "Error in chat stream",
+                        extra={
+                            "event": "chat_stream_error",
+                            "provider_id": provider_id,
+                            "model_id": model_to_use,
+                            "error": str(error_msg),
+                            "error_type": error_msg.__class__.__name__ if hasattr(error_msg, '__class__') else 'unknown'
+                        }
+                    )
+                    has_error = True
+                    error_details = str(error_msg)
+                elif "token" in event_data:
+                    response_tokens.append(event_data["token"])
                 
-            yield event_data
+                yield event_data
+                
+        except Exception as e:
+            logger.error(
+                "Unexpected error in chat stream",
+                extra={
+                    "event": "chat_stream_unexpected_error",
+                    "provider_id": provider_id,
+                    "model_id": model_to_use,
+                    "error": str(e),
+                    "error_type": e.__class__.__name__
+                },
+                exc_info=True
+            )
+            has_error = True
+            error_details = str(e)
+            yield {"error": f"Unexpected error: {str(e)}"}
             
-        # Log the completion of the chat stream
+        # Log the completion of the chat stream with full response details
+        response_text = "".join(response_tokens)
         if has_error:
             logger.warning(
                 "Chat stream completed with errors",
@@ -159,7 +184,8 @@ async def stream_chat_response(
                     "event": "chat_stream_complete_with_errors",
                     "provider_id": provider_id,
                     "model_id": model_to_use,
-                    "response_length": len("".join(response_tokens))
+                    "response_length": len(response_text),
+                    "error_details": error_details
                 }
             )
         else:
@@ -169,7 +195,21 @@ async def stream_chat_response(
                     "event": "chat_stream_complete",
                     "provider_id": provider_id,
                     "model_id": model_to_use,
-                    "response_length": len("".join(response_tokens))
+                    "response_length": len(response_text),
+                    "response_preview": response_text[:500] + ("..." if len(response_text) > 500 else ""),
+                    "full_response_available_in_logs": len(response_text) > 500
+                }
+            )
+            
+            # Log the full assistant response (in a separate log entry to handle potentially large responses)
+            logger.info(
+                "Assistant response generated",
+                extra={
+                    "event": "assistant_response",
+                    "provider_id": provider_id,
+                    "model_id": model_to_use,
+                    "response_length": len(response_text),
+                    "response": response_text
                 }
             )
             
