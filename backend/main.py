@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import List, Optional, AsyncGenerator, Dict, Any
+import atexit
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,8 +12,13 @@ from backend.models.providers import ModelInfo, ProviderMetadata, ProviderStatus
 from backend.providers.ollama import OllamaProvider
 from backend.chat_engine import stream_chat_response
 from backend.models.providers import ChatRequest, SSEEvent
+from backend.config import load_app_config, AppConfig
+from backend.logger import setup_logging
 
 logger = logging.getLogger(__name__)
+
+# Global variable to hold the log listener
+log_listener = None
 
 app = FastAPI(
     title="LightChat API",
@@ -33,11 +39,9 @@ app.add_middleware(
 async def read_root():
     return {"message": "LightChat Backend Active"}
 
-
 @app.get("/health", status_code=200)
 async def health_check():
     return {"status": "ok"}
-
 
 @app.get(
     "/models/{provider_id}",
@@ -163,10 +167,59 @@ async def chat_endpoint(chat_request: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger("uvicorn")
+
+    # Load application configuration
+    app_config = load_app_config()
+
+    # Initialize our custom logging system
+    # Note: setup_logging configures the 'lightchat' logger.
+    # Logs from other modules (like uvicorn or FastAPI) won't go through this
+    # unless they are configured to use a child of 'lightchat' or the root logger
+    # is also configured with these handlers (which logger.py currently doesn't do).
+    if app_config.logging_enabled: # Assuming we might want to disable it via config later
+        log_listener_instance = setup_logging(app_config)
+        
+        # Store the listener globally so it can be stopped
+        globals()['log_listener'] = log_listener_instance
+
+        # Get the application-specific logger instance
+        lightchat_logger = logging.getLogger("lightchat")
+
+        # Log application start
+        lightchat_logger.info(
+            "LightChat backend starting...", 
+            extra={'event_type': 'application_startup'}
+        )
+
+        # Example error log
+        lightchat_logger.error(
+            "This is a test error log message during startup.", 
+            extra={'event_type': 'test_error_log'}
+        )
+
+        # Register shutdown handler
+        def shutdown_logging():
+            lightchat_logger.info(
+                "LightChat backend shutting down...", 
+                extra={'event_type': 'application_shutdown'}
+            )
+            if globals()['log_listener']:
+                globals()['log_listener'].stop()
+                lightchat_logger.info(
+                    "Logging queue listener stopped.", 
+                    extra={'event_type': 'logging_shutdown'}
+                )
+
+        atexit.register(shutdown_logging)
+    else:
+        # Fallback to basic logging if our custom logging is disabled
+        logging.basicConfig(level=logging.INFO)
+        logging.info("Custom logging disabled, using basicConfig.")
+
+    # The uvicorn logger configuration below is for uvicorn's own server logs.
+    # It's separate from our application's 'lightchat' logger.
+    # We remove the generic logging.basicConfig that was here before.
+    # logger = logging.getLogger("uvicorn") # This line is fine if you want to reference uvicorn's logger
     
     uvicorn.run(
         "backend.main:app",
