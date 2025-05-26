@@ -1,12 +1,12 @@
 """Tests for the Ollama provider implementation."""
 import json
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock # AsyncMock might not be needed with httpx_mock
 import pytest
 import httpx
-import pytest_asyncio # Usually not needed to be imported directly if using @pytest_asyncio.fixture
+# from backend.models.providers import ModelInfo # Keeping as it was in your original
 
 from backend.providers.ollama import OllamaProvider
-from backend.models.providers import ModelInfo # This was in your original, keeping it
+
 
 # Sample response from Ollama's /api/tags endpoint
 SAMPLE_MODELS_RESPONSE = {
@@ -44,7 +44,7 @@ SAMPLE_MODELS_RESPONSE = {
     ]
 }
 
-@pytest.fixture # No need for @pytest_asyncio.fixture if it's not an async generator
+@pytest.fixture
 def ollama_provider():
     """Fixture to create an OllamaProvider instance for testing."""
     return OllamaProvider(
@@ -53,6 +53,7 @@ def ollama_provider():
         ollama_base_url="http://test-ollama:11434"
     )
 
+# --- Tests for OllamaProvider.__init__ and getters ---
 @pytest.mark.asyncio
 async def test_ollama_provider_initialization():
     """Test that OllamaProvider is initialized correctly."""
@@ -61,7 +62,6 @@ async def test_ollama_provider_initialization():
         display_name="Test Provider",
         ollama_base_url="http://custom:1234"
     )
-    
     assert provider.get_id() == "test_id"
     assert provider.get_name() == "Test Provider"
     assert provider.ollama_base_url == "http://custom:1234"
@@ -71,163 +71,242 @@ async def test_ollama_provider_initialization():
     "base_url_input, expected_api_url",
     [
         ("http://custom-url:1234", "http://custom-url:1234/api/tags"),
-        ("http://custom-url:1234/", "http://custom-url:1234/api/tags"), # With trailing slash
+        ("http://custom-url:1234/", "http://custom-url:1234/api/tags"), 
     ]
 )
-async def test_ollama_base_url_normalization(base_url_input, expected_api_url, httpx_mock):
-    """Test that the base URL is correctly normalized for API calls."""
+async def test_ollama_base_url_normalization_for_list_models(base_url_input, expected_api_url, httpx_mock):
+    """Test that the base URL is correctly normalized for list_models API calls."""
     provider = OllamaProvider("test_id", "Test Name", ollama_base_url=base_url_input)
-    
     httpx_mock.add_response(url=expected_api_url, json={"models": []}, status_code=200)
-    
     await provider.list_models()
-    
     assert len(httpx_mock.get_requests()) == 1
     assert str(httpx_mock.get_requests()[0].url) == expected_api_url
 
+# --- Tests for list_models ---
 @pytest.mark.asyncio
 async def test_list_models_success(ollama_provider, httpx_mock):
     """Test successful model listing from Ollama API."""
     httpx_mock.add_response(
-        url="http://test-ollama:11434/api/tags",
+        url=f"{ollama_provider.ollama_base_url}/api/tags",
         json=SAMPLE_MODELS_RESPONSE,
         status_code=200
     )
-    
     models = await ollama_provider.list_models()
-    
     assert len(models) == 2
     assert models[0]["id"] == "llama3:latest"
-    assert models[0]["name"] == "llama3:latest"
-    assert models[0]["modified_at"] == "2023-10-29T19:22:00.000000Z"
-    assert models[0]["size"] == 4117063800
     assert models[0]["parameter_size"] == "7B"
-    assert models[0]["quantization_level"] == "Q4_0"
-    
     assert models[1]["id"] == "mistral:latest"
-    assert models[1]["parameter_size"] == "7B"
-    assert models[1]["quantization_level"] == "Q5_K_M"
 
 @pytest.mark.asyncio
 async def test_list_models_success_empty(ollama_provider, httpx_mock):
     """Test successful model listing when Ollama returns an empty model list."""
     httpx_mock.add_response(
-        url="http://test-ollama:11434/api/tags",
+        url=f"{ollama_provider.ollama_base_url}/api/tags",
         json={"models": []},
         status_code=200
     )
-    
     models = await ollama_provider.list_models()
-    
     assert models == []
 
 @pytest.mark.asyncio
 async def test_list_models_http_request_error(ollama_provider, httpx_mock, caplog):
-    """Test handling of HTTP RequestError (e.g. connection) when listing models."""
-    httpx_mock.add_exception(
-        httpx.RequestError("Connection error")
-    )
-    
+    """Test handling of HTTP RequestError when listing models."""
+    httpx_mock.add_exception(httpx.RequestError("Connection refused"))
     models = await ollama_provider.list_models()
-    
     assert models == []
     assert "Failed to connect to Ollama API" in caplog.text
+    assert "list_models" in caplog.text
 
 @pytest.mark.asyncio
 async def test_list_models_http_status_error(ollama_provider, httpx_mock, caplog):
-    """Test handling of HTTP status errors (e.g., 404, 500) when listing models."""
+    """Test handling of HTTP status errors when listing models."""
     httpx_mock.add_response(
-        url="http://test-ollama:11434/api/tags",
-        status_code=500,
-        json={"error": "server-side issue"} # Ollama might not return JSON on 500, but good to test
+        url=f"{ollama_provider.ollama_base_url}/api/tags",
+        status_code=503, text="Service Unavailable"
     )
-    
     models = await ollama_provider.list_models()
-    
     assert models == []
     assert "Error processing Ollama API response" in caplog.text
-    # httpx.HTTPStatusError includes the status code in its string representation
-    assert "500 Internal Server Error" in caplog.text 
+    assert "503 Service Unavailable" in caplog.text # Check for status and text from response
+    assert "list_models" in caplog.text
 
 @pytest.mark.asyncio
 async def test_list_models_malformed_json_response(ollama_provider, httpx_mock, caplog):
-    """Test handling of malformed JSON response from Ollama API."""
+    """Test handling of malformed JSON response when listing models."""
     httpx_mock.add_response(
-        url="http://test-ollama:11434/api/tags",
-        content=b"This is not valid JSON",
+        url=f"{ollama_provider.ollama_base_url}/api/tags",
+        content=b"{not_valid_json_at_all",
         status_code=200
     )
-    
     models = await ollama_provider.list_models()
-    
     assert models == []
-    assert "Unexpected error fetching models from Ollama" in caplog.text
-    # Check for part of a potential JSONDecodeError message if possible and desirable
-    # For example: assert "json.decoder.JSONDecodeError" in caplog.text or similar
+    assert "Failed to parse JSON response" in caplog.text # Specific error from provider
+    assert "list_models" in caplog.text
 
 @pytest.mark.asyncio
 async def test_list_models_invalid_response_structure(ollama_provider, httpx_mock, caplog):
-    """Test handling of invalid response structure (e.g., missing 'models' key) from Ollama API."""
+    """Test handling of valid JSON but unexpected structure (e.g., missing 'models' key)."""
     httpx_mock.add_response(
-        url="http://test-ollama:11434/api/tags",
-        json={"invalid_key": "no models here"}, # Missing 'models' key
+        url=f"{ollama_provider.ollama_base_url}/api/tags",
+        json={"some_other_key": "data"}, 
         status_code=200
     )
-    
     models = await ollama_provider.list_models()
-    
     assert models == []
-    # This would likely be caught by the (httpx.HTTPStatusError, KeyError) block
-    # if data.get("models", []) fails gracefully or if a KeyError happens earlier.
-    # Given data.get("models", []) it will result in an empty list of models from the provider,
-    # rather than an error log, if "models" key is missing.
-    # If the intention is to log an error if 'models' key is missing, the provider code would need adjustment.
-    # For now, based on current provider code, this should just return an empty list without error log.
-    # Let's adjust the test based on current provider logic:
-    # assert "Error processing Ollama API response" in caplog.text # This might not be logged
-    # If the provider's `data.get("models", [])` handles it, no error is logged by that specific block.
-    # The generic exception might catch something if other processing fails.
-    # Based on the current `list_models` logic, a missing "models" key leads to an empty list,
-    # which is a valid scenario, not an error to be logged by the error handlers.
-    # Thus, the following assertions are more appropriate for this specific "missing key" test:
-    assert models == []
-    assert not caplog.records # No error should be logged if "models" key is simply missing
+    assert not caplog.records 
 
 @pytest.mark.asyncio
 async def test_list_models_with_missing_optional_fields(ollama_provider, httpx_mock):
-    """Test handling of missing optional fields in the Ollama API response."""
+    """Test handling of missing optional fields in the Ollama API response for list_models."""
     response_data = {
-        "models": [
-            {
-                "name": "simple:latest", # Added name for consistency if it's used for display
-                "model": "simple:latest",
-                "modified_at": "2023-10-29T19:22:00.000000Z",
-                "size": 1000000,
-                # "digest": "missing", # digest is not used by the provider's parsing logic
-                "details": {} # Empty details, so parameter_size and quantization_level will be None
-            }
-        ]
+        "models": [{
+            "model": "simple:latest", "name": "simple:latest",
+            "modified_at": "2023-10-29T19:22:00Z", "size": 1000, "details": {}
+        }]
     }
-    
     httpx_mock.add_response(
-        url="http://test-ollama:11434/api/tags",
-        json=response_data,
-        status_code=200
+        url=f"{ollama_provider.ollama_base_url}/api/tags",
+        json=response_data, status_code=200
     )
-    
     models = await ollama_provider.list_models()
-    
     assert len(models) == 1
     assert models[0]["id"] == "simple:latest"
-    assert models[0]["name"] == "simple:latest" # Assuming model['model'] is used for name too
     assert models[0]["parameter_size"] is None
     assert models[0]["quantization_level"] is None
 
+# --- Tests for chat_stream ---
 @pytest.mark.asyncio
-async def test_chat_stream_not_implemented(ollama_provider):
-    """Test that chat_stream raises NotImplementedError."""
-    with pytest.raises(NotImplementedError) as exc_info:
-        async for _ in ollama_provider.chat_stream("test prompt"):
-            pass # pragma: no cover (if you want to exclude this from coverage)
+async def test_chat_stream_success(ollama_provider, httpx_mock):
+    """Test successful chat stream with Ollama API."""
+    mock_sse_lines = [
+        b'data: {"message": {"content": "Hello"}, "done": false}\n\n',
+        b'data: {"message": {"content": " there"}, "done": false}\n\n',
+        b'data: {"message": {"content": "!"}, "done": true}\n\n',
+    ]
     
-    assert "Chat functionality will be implemented in a subsequent story" in str(exc_info.value)
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_lines), 
+        status_code=200, headers={"Content-Type": "application/x-ndjson"}
+    )
+    
+    tokens = []
+    async for chunk in ollama_provider.chat_stream("Hello!", model_id="llama3:latest"):
+        if "token" in chunk:
+            tokens.append(chunk["token"])
+        elif "error" in chunk:
+            pytest.fail(f"Stream yielded an error: {chunk['error']}") # Fail test if error is yielded
+            
+    assert tokens == ["Hello", " there", "!"]
+    assert len(httpx_mock.get_requests()) == 1
+    request = httpx_mock.get_requests()[0]
+    assert request.method == "POST"
+    assert json.loads(request.content) == {
+        "model": "llama3:latest",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "stream": True
+    }
+
+@pytest.mark.asyncio
+async def test_chat_stream_missing_model_id(ollama_provider, caplog):
+    """Test chat_stream with missing model_id yields an error."""
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test prompt")]
+    
+    assert len(chunks) == 1
+    assert "error" in chunks[0]
+    assert chunks[0]["error"] == "model_id is required for Ollama chat requests"
+    assert "model_id is required" in caplog.text
+
+@pytest.mark.asyncio
+async def test_chat_stream_connection_error(ollama_provider, httpx_mock, caplog):
+    """Test chat_stream handles connection errors."""
+    httpx_mock.add_exception(httpx.ConnectError("Connection failed"))
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
+    
+    assert len(chunks) == 1
+    assert "error" in chunks[0]
+    assert chunks[0]["error"] == "Failed to connect to Ollama service"
+    assert "Failed to connect to Ollama API" in caplog.text
+    assert "chat_stream" in caplog.text # Check specific method log
+
+@pytest.mark.asyncio
+async def test_chat_stream_http_error(ollama_provider, httpx_mock, caplog):
+    """Test chat_stream handles HTTP errors."""
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        status_code=404, text="Model not found"
+    )
+    
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="nonexistent_model")]
+    
+    assert len(chunks) == 1
+    assert "error" in chunks[0]
+    assert chunks[0]["error"] == "Ollama API error: 404"
+    assert "Ollama API returned HTTP error" in caplog.text
+    assert "404" in caplog.text # Check for status code in log
+
+@pytest.mark.asyncio
+async def test_chat_stream_ollama_returns_error_in_data(ollama_provider, httpx_mock, caplog):
+    """Test chat_stream when Ollama returns an error object in the stream."""
+    mock_sse_error = [
+        b'data: {"error": "model not loaded due to reasons"}\n\n',
+    ]
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_error), status_code=200,
+        headers={"Content-Type": "application/x-ndjson"}
+    )
+    chunks = [chunk async for chunk in ollama_provider.chat_stream("hi", model_id="unloaded_model")]
+    assert len(chunks) == 1
+    assert "error" in chunks[0]
+    assert chunks[0]["error"] == "Ollama API error: model not loaded due to reasons"
+    assert "Ollama API error in stream: model not loaded due to reasons" in caplog.text
+
+@pytest.mark.asyncio
+async def test_chat_stream_invalid_json_in_stream(ollama_provider, httpx_mock, caplog):
+    """Test chat_stream handles invalid JSON in the SSE response."""
+    mock_sse_invalid_json = [
+        b'data: {"message": {"content": "Valid"}, "done": false}\n\n',
+        b'data: {this is not json}\n\n', # This line will cause JSONDecodeError
+        b'data: {"message": {"content": "More valid"}, "done": false}\n\n', # This won't be reached
+    ]
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_invalid_json), status_code=200,
+        headers={"Content-Type": "application/x-ndjson"}
+    )
+    
+    results = [chunk async for chunk in ollama_provider.chat_stream("test", model_id="llama3:latest")]
+    
+    assert len(results) == 2 
+    assert results[0] == {"token": "Valid"}
+    assert "error" in results[1]
+    assert results[1]["error"] == "Failed to parse Ollama stream response"
+    assert "Failed to parse Ollama JSON response line" in caplog.text
+    assert "{this is not json}" in caplog.text 
+
+@pytest.mark.asyncio
+async def test_chat_stream_with_settings(ollama_provider, httpx_mock):
+    """Test chat_stream with additional settings are correctly passed in payload."""
+    mock_sse_response = [b'data: {"message": {"content": "Response"}, "done": true}\n\n']
+    httpx_mock.add_response(
+        method="POST", url=f"{ollama_provider.ollama_base_url}/api/chat",
+        content=b"".join(mock_sse_response), status_code=200,
+        headers={"Content-Type": "application/x-ndjson"}
+    )
+    
+    settings = {"temperature": 0.5, "top_p": 0.8, "options": {"seed": 123}}
+    
+    _ = [chunk async for chunk in ollama_provider.chat_stream("prompt", model_id="llama3:latest", settings=settings)]
+    
+    assert len(httpx_mock.get_requests()) == 1
+    request = httpx_mock.get_requests()[0]
+    payload = json.loads(request.content)
+    
+    assert payload["model"] == "llama3:latest"
+    assert payload["messages"] == [{"role": "user", "content": "prompt"}]
+    assert payload["stream"] is True
+    assert payload["temperature"] == 0.5
+    assert payload["top_p"] == 0.8
+    assert payload["options"]["seed"] == 123

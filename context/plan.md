@@ -1,16 +1,4 @@
-Epic 1: Backend Foundation & Core Services
-Goal: Establish the basic backend server, configuration, and initial provider interfaces.
-
-    LC-005: Implement Ollama Adapter - List Models (/models/{provider_id} endpoint)
-        Description: Create backend/providers/ollama.py with OllamaProvider class implementing LLMProvider. Implement list_models() to query a local Ollama instance (default http://localhost:11434/api/tags). Implement GET /models/{provider_id}.
-        AC:
-            OllamaProvider class created in providers/ollama.py.
-            list_models() method correctly fetches and returns model details from Ollama.
-            GET /models/ollama_default (or configured ID) successfully returns models.
-            Uses httpx for asynchronous HTTP requests to Ollama.
-            Basic error handling if Ollama is unreachable or returns an error.
-
-            Epic 2: Core Chat Functionality (Backend)
+Epic 2: Core Chat Functionality (Backend)
 Goal: Implement the main chat streaming logic for configured providers.
 
     LC-006: Implement Basic Chat Engine & Ollama Chat (SSE Streaming)
