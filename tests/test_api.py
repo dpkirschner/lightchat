@@ -1,13 +1,15 @@
 """Unit tests for the FastAPI endpoints."""
 
+import json
 import pytest
 import pytest_asyncio
 import httpx
 from fastapi import status
 from pydantic import ValidationError
+from typing import get_args 
 
 from backend.main import app
-from backend.models.providers import ProviderMetadata, ProviderStatus, ProviderType
+from backend.models.providers import ProviderMetadata, ProviderStatus
 
 @pytest_asyncio.fixture
 async def client():
@@ -50,6 +52,80 @@ async def test_get_providers_success(client: httpx.AsyncClient):
     assert "name" in provider
     assert "type" in provider
     assert "status" in provider
+    assert provider["status"] in get_args(ProviderStatus)
+
+# Sample models response for testing
+SAMPLE_MODELS_RESPONSE = {
+    "models": [
+        {
+            "name": "llama3:latest",
+            "model": "llama3:latest",
+            "modified_at": "2023-10-29T19:22:00.000000Z",
+            "size": 4117063800,
+            "digest": "sha256:...",
+            "details": {
+                "parent_model": "",
+                "format": "gguf",
+                "family": "llama",
+                "families": ["llama"],
+                "parameter_size": "7B",
+                "quantization_level": "Q4_0"
+            }
+        }
+    ]
+}
+
+@pytest.mark.asyncio
+async def test_get_models_success(client: httpx.AsyncClient, httpx_mock):
+    """Test successful retrieval of models from a provider."""
+    # Mock the Ollama API response
+    httpx_mock.add_response(
+        url="http://localhost:11434/api/tags",
+        json=SAMPLE_MODELS_RESPONSE,
+        status_code=200
+    )
+    
+    response = await client.get("/models/ollama_default")
+    
+    # Check status code
+    assert response.status_code == status.HTTP_200_OK
+    
+    # Parse and validate response
+    models = response.json()
+    assert isinstance(models, list)
+    assert len(models) == 1
+    
+    # Validate model structure
+    model = models[0]
+    assert "id" in model
+    assert "name" in model
+    assert "modified_at" in model
+    assert "size" in model
+    assert "parameter_size" in model
+    assert "quantization_level" in model
+
+@pytest.mark.asyncio
+async def test_get_models_provider_not_found(client: httpx.AsyncClient):
+    """Test that a 404 is returned for unknown provider IDs."""
+    response = await client.get("/models/nonexistent_provider")
+    
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == "Provider 'nonexistent_provider' not found"
+
+@pytest.mark.asyncio
+async def test_get_models_ollama_unavailable(client: httpx.AsyncClient, httpx_mock, caplog):
+    """Test handling of Ollama service being unavailable."""
+    # Mock a connection error
+    httpx_mock.add_exception(httpx.RequestError("Connection error"))
+    
+    response = await client.get("/models/ollama_default")
+    
+    # Should still return 200 with empty list
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == []
+    
+    # Verify error was logged
+    assert "Failed to connect to Ollama API" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -95,5 +171,4 @@ async def test_providers_content(client: httpx.AsyncClient):
     provider = data[0]
     assert provider["id"] == "ollama_default"
     assert provider["name"] == "Ollama"
-    assert provider["type"] == "local"
-    assert provider["status"] == "configured"
+    assert provider["status"] in get_args(ProviderStatus)

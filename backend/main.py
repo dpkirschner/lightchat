@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Optional
 
-from backend.models.providers import ProviderMetadata, ProviderStatus, ProviderType
+from backend.models.providers import ModelInfo, ProviderMetadata, ProviderStatus, ProviderType
+from backend.providers.ollama import OllamaProvider
 
 app = FastAPI(
     title="LightChat API",
@@ -30,6 +31,41 @@ async def health_check():
 
 
 @app.get(
+    "/models/{provider_id}",
+    response_model=List[ModelInfo],
+    summary="List available models from a provider",
+    description="Returns a list of models available from the specified provider.",
+    response_description="A list of model information objects"
+)
+async def list_models(provider_id: str) -> List[ModelInfo]:
+    """
+    List all available models from the specified provider.
+    
+    Args:
+        provider_id: The ID of the provider to list models from
+        
+    Returns:
+        List[ModelInfo]: A list of model information objects
+        
+    Raises:
+        HTTPException: If the provider is not found
+    """
+    # For now, we only support the hardcoded Ollama provider
+    if provider_id == "ollama_default":
+        provider = OllamaProvider(
+            provider_id="ollama_default",
+            display_name="Ollama"
+        )
+        models_data = await provider.list_models()
+        return [ModelInfo(**model_data) for model_data in models_data]
+    
+    raise HTTPException(
+        status_code=404,
+        detail=f"Provider '{provider_id}' not found"
+    )
+
+
+@app.get(
     "/providers",
     response_model=List[ProviderMetadata],
     summary="List available LLM providers",
@@ -54,4 +90,16 @@ async def get_providers() -> List[ProviderMetadata]:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+    import logging
+    
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("uvicorn")
+    
+    uvicorn.run(
+        "backend.main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )
